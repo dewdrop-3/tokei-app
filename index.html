@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>時刻読み上げ時計</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #f5f4f0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Helvetica Neue', sans-serif;
+    }
+
+    canvas {
+      border-radius: 50%;
+      background: #fff;
+      border: 1px solid #ddd;
+    }
+
+    #digital {
+      margin-top: 1.2rem;
+      font-size: 2rem;
+      font-weight: 500;
+      letter-spacing: 0.05em;
+      color: #222;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .controls {
+      margin-top: 1.2rem;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    label {
+      font-size: 0.85rem;
+      color: #666;
+    }
+
+    select, button {
+      font-size: 0.85rem;
+      padding: 6px 14px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      background: #fff;
+      cursor: pointer;
+      color: #222;
+    }
+
+    button:hover { background: #f0f0f0; }
+
+    #status {
+      margin-top: 0.8rem;
+      font-size: 0.8rem;
+      color: #999;
+      min-height: 1.2em;
+    }
+
+    #credit {
+      margin-top: 2rem;
+      font-size: 0.75rem;
+      color: #aaa;
+    }
+  </style>
+</head>
+<body>
+
+  <canvas id="clock" width="320" height="320"></canvas>
+  <div id="digital">--:--:--</div>
+
+  <div class="controls">
+    <label for="interval">読み上げ間隔</label>
+    <select id="interval">
+      <option value="15">15秒</option>
+      <option value="30">30秒</option>
+      <option value="60">1分</option>
+    </select>
+    <button id="muteBtn">音声 ON</button>
+  </div>
+
+  <div id="status"></div>
+  <div id="credit">VOICEVOX:青山龍星</div>
+
+  <script>
+    const canvas = document.getElementById('clock');
+    const ctx = canvas.getContext('2d');
+    const cx = 160, cy = 160, r = 140;
+
+    let muted = true;
+    let lastSpokenBucket = -1;
+    let lastSpokenMin = -1;
+    let interval = 15;
+    let isPlaying = false;
+
+    // -------- 時計描画 --------
+    function drawClock() {
+      const now = new Date();
+      const h = now.getHours();
+      const m = now.getMinutes();
+      const s = now.getSeconds();
+      const ms = now.getMilliseconds();
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      ctx.strokeStyle = '#cccccc';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      for (let i = 0; i < 60; i++) {
+        const angle = (i / 60) * 2 * Math.PI - Math.PI / 2;
+        const isMajor = i % 5 === 0;
+        const inner = isMajor ? r - 16 : r - 8;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(angle) * inner, cy + Math.sin(angle) * inner);
+        ctx.lineTo(cx + Math.cos(angle) * (r - 2), cy + Math.sin(angle) * (r - 2));
+        ctx.strokeStyle = isMajor ? '#333' : '#aaa';
+        ctx.lineWidth = isMajor ? 2 : 0.5;
+        ctx.stroke();
+      }
+
+      for (let i = 1; i <= 12; i++) {
+        const angle = (i / 12) * 2 * Math.PI - Math.PI / 2;
+        ctx.font = '500 14px sans-serif';
+        ctx.fillStyle = '#222';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(i, cx + Math.cos(angle) * (r - 30), cy + Math.sin(angle) * (r - 30));
+      }
+
+      const secAngle  = ((s + ms / 1000) / 60) * 2 * Math.PI - Math.PI / 2;
+      const minAngle  = ((m + s / 60) / 60) * 2 * Math.PI - Math.PI / 2;
+      const hourAngle = ((h % 12 + m / 60) / 12) * 2 * Math.PI - Math.PI / 2;
+
+      function drawHand(angle, length, width, color, tail = 12) {
+        ctx.beginPath();
+        ctx.moveTo(cx - Math.cos(angle) * tail, cy - Math.sin(angle) * tail);
+        ctx.lineTo(cx + Math.cos(angle) * length, cy + Math.sin(angle) * length);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+      }
+
+      drawHand(hourAngle, 75,  5,   '#1a1a1a', 14);
+      drawHand(minAngle,  105, 3,   '#333333', 14);
+      drawHand(secAngle,  120, 1.5, '#D85A30', 18);
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, 2 * Math.PI);
+      ctx.fillStyle = '#D85A30';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(cx, cy, 3, 0, 2 * Math.PI);
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fill();
+
+      const pad = n => String(n).padStart(2, '0');
+      document.getElementById('digital').textContent = `${pad(h)}:${pad(m)}:${pad(s)}`;
+
+      if (!muted) {
+        const totalSec = h * 3600 + m * 60 + s;
+        const minKey   = h * 60 + m;
+
+        if (s === 0 && minKey !== lastSpokenMin) {
+          lastSpokenMin    = minKey;
+          lastSpokenBucket = Math.floor(totalSec / interval);
+          playSequence([`voices/h_${h}.wav`, `voices/m_${m}.wav`], `${h}時${m}分`);
+        } else if (s !== 0 && s % interval === 0) {
+          const bucket = Math.floor(totalSec / interval);
+          if (bucket !== lastSpokenBucket) {
+            lastSpokenBucket = bucket;
+            playSequence([`voices/s_${s}.wav`], `${s}秒`);
+          }
+        }
+      }
+
+      requestAnimationFrame(drawClock);
+    }
+
+    // -------- 音声ファイルを順番に再生 --------
+    function playSequence(files, label) {
+      if (isPlaying) return;
+      showStatus(`読み上げ: ${label}`);
+      isPlaying = true;
+      let i = 0;
+      function playNext() {
+        if (i >= files.length) { isPlaying = false; return; }
+        const audio = new Audio(files[i]);
+        audio.onended = () => { i++; playNext(); };
+        audio.onerror = () => { i++; playNext(); };
+        audio.play();
+      }
+      playNext();
+    }
+
+    function showStatus(msg) {
+      const el = document.getElementById('status');
+      el.textContent = msg;
+      clearTimeout(el._timer);
+      el._timer = setTimeout(() => { el.textContent = ''; }, 3000);
+    }
+
+    // -------- UI操作 --------
+    document.getElementById('muteBtn').addEventListener('click', () => {
+      muted = !muted;
+      document.getElementById('muteBtn').textContent = muted ? '音声 ON' : '音声 OFF';
+    });
+
+    document.getElementById('interval').addEventListener('change', e => {
+      interval = parseInt(e.target.value);
+      lastSpokenBucket = -1;
+    });
+
+    drawClock();
+  </script>
+</body>
+</html>
