@@ -96,12 +96,24 @@
     const cx = 160, cy = 160, r = 140;
 
     let muted = true;
+    let audioUnlocked = false;
     let lastSpokenBucket = -1;
     let lastSpokenMin = -1;
     let interval = 15;
     let isPlaying = false;
 
-    // -------- 時計描画 --------
+    // 🔥 音声解放（ユーザー操作時のみ）
+    function unlockAudio() {
+      if (audioUnlocked) return;
+
+      const audio = new Audio('voices/s_15.wav');
+      audio.play().then(() => {
+        audio.pause();
+        audio.currentTime = 0;
+        audioUnlocked = true;
+      }).catch(() => {});
+    }
+
     function drawClock() {
       const now = new Date();
       const h = now.getHours();
@@ -113,10 +125,9 @@
 
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, 2 * Math.PI);
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = '#fff';
       ctx.fill();
-      ctx.strokeStyle = '#cccccc';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#ccc';
       ctx.stroke();
 
       for (let i = 0; i < 60; i++) {
@@ -133,7 +144,6 @@
 
       for (let i = 1; i <= 12; i++) {
         const angle = (i / 12) * 2 * Math.PI - Math.PI / 2;
-        ctx.font = '500 14px sans-serif';
         ctx.fillStyle = '#222';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -144,45 +154,36 @@
       const minAngle  = ((m + s / 60) / 60) * 2 * Math.PI - Math.PI / 2;
       const hourAngle = ((h % 12 + m / 60) / 12) * 2 * Math.PI - Math.PI / 2;
 
-      function drawHand(angle, length, width, color, tail = 12) {
+      function drawHand(angle, length, width, color) {
         ctx.beginPath();
-        ctx.moveTo(cx - Math.cos(angle) * tail, cy - Math.sin(angle) * tail);
+        ctx.moveTo(cx, cy);
         ctx.lineTo(cx + Math.cos(angle) * length, cy + Math.sin(angle) * length);
         ctx.strokeStyle = color;
         ctx.lineWidth = width;
-        ctx.lineCap = 'round';
         ctx.stroke();
       }
 
-      drawHand(hourAngle, 75,  5,   '#1a1a1a', 14);
-      drawHand(minAngle,  105, 3,   '#333333', 14);
-      drawHand(secAngle,  120, 1.5, '#D85A30', 18);
-
-      ctx.beginPath();
-      ctx.arc(cx, cy, 6, 0, 2 * Math.PI);
-      ctx.fillStyle = '#D85A30';
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(cx, cy, 3, 0, 2 * Math.PI);
-      ctx.fillStyle = '#1a1a1a';
-      ctx.fill();
+      drawHand(hourAngle, 75, 5, '#000');
+      drawHand(minAngle, 105, 3, '#333');
+      drawHand(secAngle, 120, 1.5, '#D85A30');
 
       const pad = n => String(n).padStart(2, '0');
       document.getElementById('digital').textContent = `${pad(h)}:${pad(m)}:${pad(s)}`;
 
-      if (!muted) {
+      // 🔥 ミュート解除＆音声許可済みのときだけ再生
+      if (!muted && audioUnlocked) {
         const totalSec = h * 3600 + m * 60 + s;
-        const minKey   = h * 60 + m;
+        const minKey = h * 60 + m;
 
         if (s === 0 && minKey !== lastSpokenMin) {
-          lastSpokenMin    = minKey;
+          lastSpokenMin = minKey;
           lastSpokenBucket = Math.floor(totalSec / interval);
-          playSequence([`voices/h_${h}.wav`, `voices/m_${m}.wav`], `${h}時${m}分`);
-        } else if (s !== 0 && s % interval === 0) {
+          playSequence([`voices/h_${h}.wav`, `voices/m_${m}.wav`]);
+        } else if (s % interval === 0) {
           const bucket = Math.floor(totalSec / interval);
           if (bucket !== lastSpokenBucket) {
             lastSpokenBucket = bucket;
-            playSequence([`voices/s_${s}.wav`], `${s}秒`);
+            playSequence([`voices/s_${s}.wav`]);
           }
         }
       }
@@ -190,31 +191,30 @@
       requestAnimationFrame(drawClock);
     }
 
-    // -------- 音声ファイルを順番に再生 --------
-    function playSequence(files, label) {
+    function playSequence(files) {
       if (isPlaying) return;
-      showStatus(`読み上げ: ${label}`);
       isPlaying = true;
       let i = 0;
-      function playNext() {
-        if (i >= files.length) { isPlaying = false; return; }
+
+      function next() {
+        if (i >= files.length) {
+          isPlaying = false;
+          return;
+        }
         const audio = new Audio(files[i]);
-        audio.onended = () => { i++; playNext(); };
-        audio.onerror = () => { i++; playNext(); };
-        audio.play();
+        audio.onended = () => { i++; next(); };
+        audio.onerror = () => { i++; next(); };
+        audio.play().catch(() => {
+          setTimeout(() => audio.play().catch(() => {}), 200);
+        });
       }
-      playNext();
+
+      next();
     }
 
-    function showStatus(msg) {
-      const el = document.getElementById('status');
-      el.textContent = msg;
-      clearTimeout(el._timer);
-      el._timer = setTimeout(() => { el.textContent = ''; }, 3000);
-    }
-
-    // -------- UI操作 --------
     document.getElementById('muteBtn').addEventListener('click', () => {
+      unlockAudio(); // 🔥 ここが全て
+
       muted = !muted;
       document.getElementById('muteBtn').textContent = muted ? '音声 ON' : '音声 OFF';
     });
