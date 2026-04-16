@@ -41,10 +41,7 @@
       justify-content: center;
     }
 
-    label {
-      font-size: 0.85rem;
-      color: #666;
-    }
+    label { font-size: 0.85rem; color: #666; }
 
     select, button {
       font-size: 0.85rem;
@@ -96,24 +93,77 @@
     const cx = 160, cy = 160, r = 140;
 
     let muted = true;
-    let audioUnlocked = false;
     let lastSpokenBucket = -1;
     let lastSpokenMin = -1;
     let interval = 15;
     let isPlaying = false;
 
-    // 🔥 音声解放（ユーザー操作時のみ）
-    function unlockAudio() {
-      if (audioUnlocked) return;
+    // -------- AudioContext（iPhone Safari対応の核心）--------
+    let audioCtx = null;
 
-      const audio = new Audio('voices/s_15.wav');
-      audio.play().then(() => {
-        audio.pause();
-        audio.currentTime = 0;
-        audioUnlocked = true;
-      }).catch(() => {});
+    function getAudioCtx() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      // iPhoneはsuspended状態になることがあるので必ずresumeする
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+      return audioCtx;
     }
 
+    // -------- ピッ音（Web Audio API で生成・ファイル不要）--------
+    // count: 1=ぴっ(57秒), 2=ぴっぴっ(58秒), 3=ぴっぴっぴっ(59秒)
+    function playBeeps(count) {
+      const ac = getAudioCtx();
+      const baseTime = ac.currentTime;
+      for (let i = 0; i < count; i++) {
+        const osc = ac.createOscillator();
+        const gain = ac.createGain();
+        osc.connect(gain);
+        gain.connect(ac.destination);
+        osc.type = 'sine';
+        osc.frequency.value = 880;
+        const start = baseTime + i * 0.22;
+        const end   = start + 0.12;
+        gain.gain.setValueAtTime(0, start);
+        gain.gain.linearRampToValueAtTime(0.6, start + 0.01);
+        gain.gain.linearRampToValueAtTime(0, end);
+        osc.start(start);
+        osc.stop(end + 0.05);
+      }
+    }
+
+    // -------- 音声ファイルをAudioContextで再生（iPhone対応）--------
+    function playFileWithCtx(url) {
+      return new Promise((resolve) => {
+        const ac = getAudioCtx();
+        fetch(url)
+          .then(res => res.arrayBuffer())
+          .then(buf => ac.decodeAudioData(buf))
+          .then(decoded => {
+            const source = ac.createBufferSource();
+            source.buffer = decoded;
+            source.connect(ac.destination);
+            source.onended = resolve;
+            source.start(0);
+          })
+          .catch(() => resolve());
+      });
+    }
+
+    // -------- 音声ファイルを順番に再生 --------
+    async function playSequence(files, label) {
+      if (isPlaying) return;
+      isPlaying = true;
+      if (label) showStatus(`読み上げ: ${label}`);
+      for (const file of files) {
+        await playFileWithCtx(file);
+      }
+      isPlaying = false;
+    }
+
+    // -------- 時計描画 --------
     function drawClock() {
       const now = new Date();
       const h = now.getHours();
@@ -125,9 +175,10 @@
 
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, 2 * Math.PI);
-      ctx.fillStyle = '#fff';
+      ctx.fillStyle = '#ffffff';
       ctx.fill();
-      ctx.strokeStyle = '#ccc';
+      ctx.strokeStyle = '#cccccc';
+      ctx.lineWidth = 1;
       ctx.stroke();
 
       for (let i = 0; i < 60; i++) {
@@ -144,6 +195,7 @@
 
       for (let i = 1; i <= 12; i++) {
         const angle = (i / 12) * 2 * Math.PI - Math.PI / 2;
+        ctx.font = '500 14px sans-serif';
         ctx.fillStyle = '#222';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -154,36 +206,56 @@
       const minAngle  = ((m + s / 60) / 60) * 2 * Math.PI - Math.PI / 2;
       const hourAngle = ((h % 12 + m / 60) / 12) * 2 * Math.PI - Math.PI / 2;
 
-      function drawHand(angle, length, width, color) {
+      function drawHand(angle, length, width, color, tail = 12) {
         ctx.beginPath();
-        ctx.moveTo(cx, cy);
+        ctx.moveTo(cx - Math.cos(angle) * tail, cy - Math.sin(angle) * tail);
         ctx.lineTo(cx + Math.cos(angle) * length, cy + Math.sin(angle) * length);
         ctx.strokeStyle = color;
         ctx.lineWidth = width;
+        ctx.lineCap = 'round';
         ctx.stroke();
       }
 
-      drawHand(hourAngle, 75, 5, '#000');
-      drawHand(minAngle, 105, 3, '#333');
-      drawHand(secAngle, 120, 1.5, '#D85A30');
+      drawHand(hourAngle, 75,  5,   '#1a1a1a', 14);
+      drawHand(minAngle,  105, 3,   '#333333', 14);
+      drawHand(secAngle,  120, 1.5, '#D85A30', 18);
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, 2 * Math.PI);
+      ctx.fillStyle = '#D85A30';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(cx, cy, 3, 0, 2 * Math.PI);
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fill();
 
       const pad = n => String(n).padStart(2, '0');
       document.getElementById('digital').textContent = `${pad(h)}:${pad(m)}:${pad(s)}`;
 
-      // 🔥 ミュート解除＆音声許可済みのときだけ再生
-      if (!muted && audioUnlocked) {
+      if (!muted) {
         const totalSec = h * 3600 + m * 60 + s;
-        const minKey = h * 60 + m;
+        const minKey   = h * 60 + m;
 
-        if (s === 0 && minKey !== lastSpokenMin) {
-          lastSpokenMin = minKey;
+        // 57・58・59秒のカウントダウンビープ
+        if (s === 57 || s === 58 || s === 59) {
+          const beepBucket = totalSec;
+          if (beepBucket !== lastSpokenBucket) {
+            lastSpokenBucket = beepBucket;
+            playBeeps(1); // 57→1回, 58→2回, 59→3回
+          }
+        }
+        // 分が変わった瞬間 → 「〇時〇分」
+        else if (s === 0 && minKey !== lastSpokenMin) {
+          lastSpokenMin    = minKey;
           lastSpokenBucket = Math.floor(totalSec / interval);
-          playSequence([`voices/h_${h}.wav`, `voices/m_${m}.wav`]);
-        } else if (s % interval === 0) {
+          playSequence([`voices/h_${h}.wav`, `voices/m_${m}.wav`], `${h}時${m}分`);
+        }
+        // 15秒ごと → 「〇〇秒」
+        else if (s !== 0 && s % interval === 0) {
           const bucket = Math.floor(totalSec / interval);
           if (bucket !== lastSpokenBucket) {
             lastSpokenBucket = bucket;
-            playSequence([`voices/s_${s}.wav`]);
+            playSequence([`voices/s_${s}.wav`], `${s}秒`);
           }
         }
       }
@@ -191,29 +263,17 @@
       requestAnimationFrame(drawClock);
     }
 
-    function playSequence(files) {
-      if (isPlaying) return;
-      isPlaying = true;
-      let i = 0;
-
-      function next() {
-        if (i >= files.length) {
-          isPlaying = false;
-          return;
-        }
-        const audio = new Audio(files[i]);
-        audio.onended = () => { i++; next(); };
-        audio.onerror = () => { i++; next(); };
-        audio.play().catch(() => {
-          setTimeout(() => audio.play().catch(() => {}), 200);
-        });
-      }
-
-      next();
+    function showStatus(msg) {
+      const el = document.getElementById('status');
+      el.textContent = msg;
+      clearTimeout(el._timer);
+      el._timer = setTimeout(() => { el.textContent = ''; }, 3000);
     }
 
+    // -------- UI操作 --------
     document.getElementById('muteBtn').addEventListener('click', () => {
-      unlockAudio(); // 🔥 ここが全て
+      // ユーザー操作のタイミングでAudioContextを初期化・再開（iPhone必須）
+      getAudioCtx();
 
       muted = !muted;
       document.getElementById('muteBtn').textContent = muted ? '音声 ON' : '音声 OFF';
